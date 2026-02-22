@@ -2,14 +2,133 @@
 MongoDB database configuration and setup for Mergington High School API
 """
 
+from copy import deepcopy
 from pymongo import MongoClient
 from argon2 import PasswordHasher, exceptions as argon2_exceptions
 
-# Connect to MongoDB
-client = MongoClient('mongodb://localhost:27017/')
-db = client['mergington_high']
-activities_collection = db['activities']
-teachers_collection = db['teachers']
+
+class _UpdateResult:
+    def __init__(self, modified_count: int):
+        self.modified_count = modified_count
+
+
+class InMemoryCollection:
+    def __init__(self):
+        self._documents = {}
+
+    def count_documents(self, query):
+        if query:
+            return sum(1 for _ in self.find(query))
+        return len(self._documents)
+
+    def insert_one(self, document):
+        doc = deepcopy(document)
+        self._documents[doc["_id"]] = doc
+
+    def find_one(self, query):
+        """
+        Return a single document matching the query.
+
+        Supports both direct '_id' lookups and more general queries,
+        using the same matching logic as the 'find' method.
+        """
+        if query is None:
+            query = {}
+
+        # Fast path for direct '_id' lookups
+        doc_id = query.get("_id")
+        if doc_id is not None:
+            doc = self._documents.get(doc_id)
+            return deepcopy(doc) if doc else None
+
+        # General query path: return the first document that matches
+        for document in self._documents.values():
+            if self._matches(document, query):
+                return deepcopy(document)
+
+        return None
+    def _matches(self, document, query):
+        if not query:
+            return True
+
+        for key, value in query.items():
+            if key == "_id":
+                if document.get("_id") != value:
+                    return False
+            elif key == "schedule_details.days":
+                days = document.get("schedule_details", {}).get("days", [])
+                required_days = value.get("$in", [])
+                if not any(day in days for day in required_days):
+                    return False
+            elif key == "schedule_details.start_time":
+                start_time = document.get("schedule_details", {}).get("start_time", "")
+                if start_time < value.get("$gte", ""):
+                    return False
+            elif key == "schedule_details.end_time":
+                end_time = document.get("schedule_details", {}).get("end_time", "")
+                if end_time > value.get("$lte", ""):
+                    return False
+        return True
+
+    def find(self, query=None):
+        for document in self._documents.values():
+            if self._matches(document, query or {}):
+                yield deepcopy(document)
+
+    def update_one(self, query, update):
+        doc_id = query.get("_id")
+        if doc_id is None or doc_id not in self._documents:
+            return _UpdateResult(0)
+
+        document = self._documents[doc_id]
+        modified = False
+
+        if "$push" in update:
+            push_modified = False
+            for field, value in update["$push"].items():
+                current = document.setdefault(field, [])
+                current.append(value)
+                push_modified = True
+            modified = modified or push_modified
+
+        if "$pull" in update:
+            pull_modified = False
+            for field, value in update["$pull"].items():
+                current = document.get(field, [])
+                if isinstance(current, list):
+                    original_len = len(current)
+                    # Remove all occurrences of the value
+                    current[:] = [item for item in current if item != value]
+                    if len(current) != original_len:
+                        pull_modified = True
+            modified = modified or pull_modified
+
+        return _UpdateResult(1 if modified else 0)
+
+    def aggregate(self, pipeline):
+        if pipeline == [
+            {"$unwind": "$schedule_details.days"},
+            {"$group": {"_id": "$schedule_details.days"}},
+            {"$sort": {"_id": 1}},
+        ]:
+            days = set()
+            for document in self._documents.values():
+                days.update(document.get("schedule_details", {}).get("days", []))
+            for day in sorted(days):
+                yield {"_id": day}
+
+
+def _create_database_collections():
+    try:
+        mongo_client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=1500)
+        mongo_client.admin.command("ping")
+        mongo_db = mongo_client["mergington_high"]
+        return mongo_client, mongo_db["activities"], mongo_db["teachers"]
+    except Exception:
+        return None, InMemoryCollection(), InMemoryCollection()
+
+
+client, activities_collection, teachers_collection = _create_database_collections()
 
 # Methods
 
