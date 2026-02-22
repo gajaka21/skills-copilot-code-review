@@ -84,17 +84,24 @@ class InMemoryCollection:
         modified = False
 
         if "$push" in update:
+            push_modified = False
             for field, value in update["$push"].items():
                 current = document.setdefault(field, [])
                 current.append(value)
-                modified = True
+                push_modified = True
+            modified = modified or push_modified
 
         if "$pull" in update:
+            pull_modified = False
             for field, value in update["$pull"].items():
                 current = document.get(field, [])
-                if value in current:
-                    current.remove(value)
-                    modified = True
+                if isinstance(current, list):
+                    original_len = len(current)
+                    # Remove all occurrences of the value
+                    current[:] = [item for item in current if item != value]
+                    if len(current) != original_len:
+                        pull_modified = True
+            modified = modified or pull_modified
 
         return _UpdateResult(1 if modified else 0)
 
