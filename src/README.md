@@ -12,23 +12,18 @@ A super simple FastAPI application that allows students to view and sign up for 
 1. Install the dependencies:
 
    ```
-   pip install -r requirements.txt
+   pip install fastapi uvicorn
    ```
 
 2. Run the application:
 
    ```
-   uvicorn src.app:app --reload
+   python app.py
    ```
 
 3. Open your browser and go to:
    - API documentation: http://localhost:8000/docs
    - Alternative documentation: http://localhost:8000/redoc
-
-## Database Notes
-
-- The app attempts to connect to MongoDB at `mongodb://localhost:27017/`.
-- If MongoDB is unavailable, the app automatically falls back to an in-memory database so the API can still start for local development.
 
 ## API Endpoints
 
